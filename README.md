@@ -10,24 +10,26 @@ Ce backtest sert à tester une stratégie de trading définie par l'utilisateur 
 
 - **Calcul des positions** : Génération des positions passées basées sur une stratégie définie par l'utilisateur ou dans les stratégies exemple.
 - **Valeur de marché** : Calcul de la valeur de marché d'un portefeuille suivant cette stratégie à partir des positions et des prix des actifs.
-- **Rendements** : Calcul des rendements logarithmiques du portefeuille suivant la stratégie.
+- **Rendements** : Calcul des rendements du portefeuille suivant la stratégie.
 - **Analyse de performance** : Affichage et visualisation des statistiques de performance.
 
 ## Classes principales
 
 ### Backtest
 
-Cette classe est le coeur du package. Elle permet de réaliser un backtest complet en utilisant une stratégie prédéfinie et un ensemble de données.
+Cette classe est le coeur du projet. Elle permet de réaliser un backtest complet en utilisant une stratégie prédéfinie et un ensemble de données. Il s'agit du package à installer.
 
 #### Constructeur
 
 ```python
-Backtest(data: pd.DataFrame, strategy: Strategy, frequence_rebalancement: int)
+Backtest(data: pd.DataFrame, strategy: Strategy, frequence_rebalancement : int, initial_value : float, transaction_cost : float)
 ```
-
 - **data** : `pd.DataFrame` contenant les données de prix historiques des actifs.
 - **strategy** : Instance de la classe `Strategy` définissant les règles d'investissement.
-- **frequence_rebalancement** : Fréquence de rebalancement des positions en nombre de jours.
+- **frequence_rebalancement** : Fréquence de rebalancement des positions, exprimée dans la même unité que l'historique de prix.
+- **initial_value** : valeur initiale du portefeuille, celle investie à la création du portefeuille.
+- **transaction_cost** : frais de transaction, proportionnels au nombre de trades effectués.
+
 
 #### Méthodes
 
@@ -35,12 +37,12 @@ Backtest(data: pd.DataFrame, strategy: Strategy, frequence_rebalancement: int)
   - Calcule les positions de la stratégie pour chaque date en utilisant une fenêtre glissante définie par la stratégie.
 
 - **calculate_market_value(positions: pd.DataFrame)** :
-  - Calcule la valeur de marché des positions du portefeuille.
+  - Calcule la valeur de marché du portefeuille.
 
 - **calculate_returns() -> pd.DataFrame** :
-  - Calcule les rendements logarithmiques basés sur la valeur de marché du portefeuille.
+  - Calcule les rendements basés sur la valeur de marché du portefeuille.
 
-- **BACKTEST(risk_free_rate: float, mar: float)** :
+- **execute_backtest(risk_free_rate: float, mar: float, backend:str)** :
   - Effectue le backtest complet en calculant les statistiques et en affichant les visualisations via la classe `Result`.
 
 ### Strategy
@@ -55,8 +57,8 @@ La classe `Strategy` est une classe abstraite définissant les règles général
 
 #### Méthode statique utile
 
-- **fit** :
-  - Permet d'effectuer une régression linéaire ordinaire (OLS) sur des variables endogènes et exogènes.
+- **`fit`** :
+  - Permet d'effectuer une régression linéaire ordinaire (OLS) sur des variables endogènes et exogènes. Cela peut servir pour un certain nombre de stratégies, mais n'est pas une méthode obligatoire.  
 
 ```python
 @staticmethod
@@ -91,8 +93,9 @@ Result(backtest: Backtest, risk_free_rate: float, mar: float)
 
 #### Visualisations
 
-- **plot_results(backend="matplotlib")** : Affiche la valeur du portefeuille au cours du temps. Options pour `seaborn` et `plotly`.
-- **plot_risk_return(backend="seaborn")** : Génère un graphique rendement/risque pour chaque actif. Options pour `matplotlib`, `seaborn`, et `plotly`.
+- `**plot_results(backend="matplotlib")**` : Affiche la valeur du portefeuille au cours du temps. Options pour `matplotlib.pyplot`, `seaborn` et `plotly`.
+- `**plot_risk_return(backend="seaborn")**` : Génère un graphique rendement/risque pour chaque actif. Options pour `matplotlib.pyplot`, `seaborn`, et `plotly`.
+- **`compare_results(*results, strategy_names : List[str]=None, backend : str ="matplotlib")`**` : Génère un ensemble de graphiques et de résultats pour comparer diverses stratégies entre elles. 
 
 #### Statistiques
 
@@ -105,8 +108,6 @@ Result(backtest: Backtest, risk_free_rate: float, mar: float)
   - Drawdown maximum
   - Nombre de trades
   - Pourcentage de trades gagnants
-
-- **compare_results(*results, backend="matplotlib")** : Compare les performances de plusieurs stratégies à l'aide d'un graphique interactif.
 
 ## Prérequis
 
@@ -132,11 +133,10 @@ pip install backtest
 
 ### Installation via le dépôt Git
 
-Vous pouvez également cloner le dépôt et l'installer localement :
-(Il faudra changer cette partie quand on aura déposé le projet sur GitHub)
+Vous pouvez également cloner le dépôt et l'installer localement 
 
 ```bash
-git clone https://github.com/username/backtest.git
+git clone https://github.com/GiovanniManche/Backtest_POO.git
 cd backtest
 pip install .
 ```
@@ -169,12 +169,12 @@ result.plot_risk_return(backend="seaborn")
 ```
 
 ## Structure des fichiers
-
+### Dossier backtest
 - `backtest.py` : Contient la classe principale `Backtest`.
-- `strategy.py` : Contient la classe `Strategy` et ses implémentations personnalisées.
+- `strategy.py` : Contient la classe abstraite `Strategy`
 - `result.py` : Gère l'analyse des résultats et les visualisations via la classe `Result`.
 
-
-## Licence
-
-Hmm sous quelle license est ce projet ? Dauphine ?
+### Dossier example
+- `utils` : Contient des fichiers CSV de données, utilisés dans nos exemples.
+- `strategy_examples.py` : Contient diverses implémentations de `Strategy`
+- `backtest_usage_example.ipynb` : Fournit des exemples d'utilisation du backtest et d'analyse des résultats
