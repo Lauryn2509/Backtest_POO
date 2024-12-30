@@ -6,7 +6,9 @@ import math
 import sys
 import os
 from backtest.strategy import Strategy
-
+"""
+On renseigne dans ce fichier la (les) stratégie(s) que l'on souhaite tester
+"""
 
 class Momentum(Strategy):
     """
