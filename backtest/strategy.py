@@ -5,7 +5,6 @@ import plotly.express as px
 from typing import Union
 import pandas as pd, numpy as np, statsmodels.api as sm
 
-
 class Strategy(metaclass=abc.ABCMeta):
 
     """
