@@ -1,0 +1,324 @@
+import pandas as pd, numpy as np, statsmodels.api as sm
+from scipy.optimize import minimize
+from typing import Dict
+from enum import Enum
+import math
+import sys
+import os
+from backtest.strategy import Strategy
+
+# Ajouter le dossier parent de "backtest" au sys.path
+sys.path.append(os.path.abspath("../"))
+
+class Value(Strategy):
+    """
+    Cette classe met en oeuvre une stratégie de type Value : 
+        - on est short sur les valeurs "expensives", avec un PER élevé
+        - on est long sur les valeurs "cheap", avec un PER faible.
+    L'objectif est d'exploiter un phénomène de retour à la moyenne (les actions peu chères vont monter et inversement)
+    
+    Attributs : 
+    ---
+        PER_data : dataframe contenant les PER des actifs du portefeuille
+        calculation_window : fenêtre de l'historique à considérer pour les calculs
+        shortSell : booléen indiquant si la vente à découvert est autorisée. La stratégie Value étant
+            par nature une stratégie long-short, l'interdire n'aurait guère de sens
+    ---
+    """
+    def __init__(self, PER_data: pd.DataFrame, calculation_window : int,
+                  shortSell : bool = True):
+        self.PER = PER_data
+        self.calculation_window = calculation_window
+        self.shortSell = shortSell
+        self.total_asset = self.PER.columns
+
+    def get_position(self, historical_data: pd.DataFrame) -> pd.DataFrame:
+        # On supprime les séries pour lesquels il manque des PER. Cela réduit forcément l'univers d'investissement.
+        # Par soucis d'homogénéité, on fixera simplement automatiquement à 0 les parts des produits ainsi supprimés.
+        # Enfin, on filtre le PER pour ne conserver que les dates souhaitées. 
+        position = pd.Series(0.0, index=self.total_asset)
+        common_dates = self.PER.index.intersection(historical_data.index)
+        PER_filtered = self.PER.loc[common_dates]
+        if PER_filtered.empty:
+            raise ValueError("Les données de prix et de PER n'ont pas de dates communes.")
+        cols_with_na = PER_filtered.columns[PER_filtered.isna().any()]
+        PER_filtered = PER_filtered.drop(columns=cols_with_na)
+
+        # Initialisation des positions
+        position = pd.Series(0.0, index=self.total_asset)
+
+        # Calcul du PER moyen sur la période filtrée
+        means = PER_filtered.mean()
+        # Récupération du dernier PER correspondant à la période actuelle
+        concerned_PER = PER_filtered.tail(1)
+
+        # Calcul des différences relatives et des rangs
+        relative_diff = (concerned_PER - means) / means
+        ranks = relative_diff.rank(axis=1, method="min", ascending=False)
+
+        # Centrage des rangs
+        mean_ranks = ranks.mean(axis=1)
+        centered_ranks = ranks.subtract(mean_ranks, axis=0)
+
+        # Dissociation des positions long et short
+        longs = centered_ranks.where(centered_ranks >= 0, 0)
+        shorts = centered_ranks.where(centered_ranks < 0, 0)
+        long_weights = longs.div(longs.sum(axis=1), axis=0).fillna(0)
+        short_weights = shorts.div(shorts.abs().sum(axis=1), axis=0).fillna(0)
+
+        # Surpondération des positions longues, de sorte à ce que le total des parts soit de 1
+        long_weights = long_weights * 2
+        weights = (long_weights + short_weights)
+        weights = weights.iloc[0]
+
+        position[PER_filtered.columns] = weights.values
+        return position
+    
+class Method(Enum):
+    """
+    Cette classe permet d'énumérer les choix de méthodes possibles pour la construction du portefeuille Fama & French.
+    """
+    BETA_MKT = "Beta_Mkt"       # Achat des actifs du portefeuille avec la prime de marché la plus élevée, vente des autres 
+    BETA_HML = "Beta_HML"       # Achat des actifs du portefeuille avec la prime de capitalisation la plus élevée, vente des autres
+    BETA_SMB = "Beta_SMB"       # Achat des actifs du portefeuille avec la prime de valeur la plus élevée, vente des autres
+
+class FamaFrench(Strategy):
+    """
+    Cette classe met en oeuvre une stratégie de type factor investing.
+    En se basant sur le modèle de Fama & French, nous décidons d'acheter les actifs les plus exposés à un facteur, et vendre des actifs les moins exposés 
+
+    Attributs : 
+    ---
+        FF_factors : dataframe contenant l'historique des facteurs. Ils sont disponibles sur le site de Kenneth R. French.
+                     Ce dataframe doit disposer des mêmes dates que le dataframe de prix, dans une colonne "Dates"
+        window : entier représentant la fenêtre de calcul considérée
+        method : objet facultatif permettant de choisir entre les 3 méthodes. 
+        short_sell : booléen facultatif permettant à l'utilisateur de préciser si la vente à découvert est autorisée. Son interdiction n'est prise en compte
+                     qu'en cas de maximisation du ratio de Sharpe, les autres méthodes étant de type long-short par nature.
+        self_financed : booléen facultatif permettant à l'utilisateur de préciser si la stratégie
+                        est autofinancée (auquel cas la somme des parts est nulle) ou non.
+    ---
+    """
+    def __init__(self, FF_Factors:pd.DataFrame, calculation_window: int, user_method: Method = Method.BETA_MKT, short_sell: bool = True):
+        self.FF_factors: pd.DataFrame = FF_Factors
+        self.FF_factors['Dates'] = pd.to_datetime(self.FF_factors['Dates'], format='%d/%m/%Y')
+        self.FF_factors.set_index("Dates", inplace = True)
+        self.calculation_window: int = calculation_window
+        if not isinstance(user_method, Method):
+            raise ValueError("Merci d'utiliser l'objet method pour votre choix de méthode")
+        self.method: Method = user_method
+        self.short_sell: bool = short_sell
+
+    def get_position(self, historical_data: pd.DataFrame) -> np.ndarray:
+        """
+        Fonction qui calcule les positions optimales en fonction de la méthode demandée.
+        Elle calcule d'abord les rendements, puis effectue la régression (calcul des betas).
+        ---
+        Arguments : 
+            - l'instance elle-même
+            - historical_data : dataframe contenant les prix des actifs du portefeuille
+        ---
+        Output :
+            - positions_array : vecteur contenant les positions optimales
+        ---
+        """
+        #historical_data.set_index("Dates", inplace = True)
+        self.returns: pd.DataFrame = (np.log(historical_data / historical_data.shift(1)) * 100).dropna(how = "any")
+        # La jointure permet la concordance temporelle entre les facteurs et les rendements
+        dataset: pd.DataFrame = self.returns.join(self.FF_factors, how = "inner")
+        # Régression
+        betas: pd.DataFrame = self.fit(dataset)
+        return self.factor_exposure_method(betas)
+        
+    def fit(self, dataset: pd.DataFrame):
+        """
+        Fonction qui effectue la régression linéaire multivariée de Fama&French pour chaque actif du portefeuille.
+        ---
+        Arguments :
+            - l'instance de la classe ;
+            - dataset : dataframe contenant les rendements des actifs et les facteurs de Fama et French
+        ---
+        Output : 
+            - Coefficients de la régression linéaire, avec les actifs en ligne et les coefficients en colonne
+        ---  
+        """
+        factors: list = [colname for colname in self.FF_factors.columns if colname != "RF"]
+        betas: Dict[str, pd.Series] = {}
+        # Régression pour chaque actif
+        for asset in self.returns.columns:
+            # Ajout d'une constante (le alpha) dans les exogènes
+            exogenous_variables: pd.DataFrame = sm.add_constant(dataset[factors])
+            # Variable expliquée = rendement excédentaire de l'actif
+            endogenous_variable : pd.Series = dataset[asset] - dataset["RF"]
+            # OLS et récupération des coefficients
+            FF_regression: sm.regression.linear_model.RegressionResultsWrapper = Strategy.fit(endogenous_variable, exogenous_variables)
+            betas[asset] = FF_regression.params
+        # Mise en forme            
+        betas_df = pd.DataFrame(betas).T
+        betas_df.columns = ["Alpha", "Beta_Mkt", "Beta_SMB", "Beta_HML"]
+        return betas_df
+
+    def factor_exposure_method(self, betas: pd.DataFrame):
+        """
+        Fonction qui calcule les parts d'un portefeuille où l'on achèterait les actifs en moyenne les plus exposés à un facteur 
+        et vendrait les autres. 
+        ---
+        Arguments : 
+            - l'instance elle-même ;
+            - betas : dataframe contenant les betas de la régression de Fama&French pour chaque actif 
+        """
+        # Récupération de la colonne du facteur choisi par l'utilisateur, ordonnée de manière croissante
+        sorted_betas: pd.Series = betas.sort_values(by=self.method.value)[self.method.value]
+        # Calcul et centrage des rangs
+        ranks: pd.Series = sorted_betas.rank(axis = 0, method = "min")
+        mean_ranks: float= ranks.mean()
+        centered_ranks: pd.Series = ranks.subtract(mean_ranks)
+        # On achète les actifs en moyenne les plus exposés et vendons les autres. 
+        longs: pd.Series = centered_ranks.where(centered_ranks > 0, 0)
+        shorts: pd.Series = centered_ranks.where(centered_ranks < 0, 0)
+        # Nous normalisons les parts pour que la somme absolue des parts longues soit de 1, comme celle des parts shorts
+        # Nous en profitons pour réordonner les actifs 
+        long_weights: pd.Series = longs.div(longs.sum()).fillna(0).reindex(self.returns.columns)
+        short_weights: pd.Series = shorts.div(shorts.abs().sum()).fillna(0).reindex(self.returns.columns)
+        long_weights = long_weights * 2
+        weights: pd.DataFrame = pd.DataFrame(columns=self.returns.columns)
+        weights = (long_weights + short_weights).values
+        return weights.flatten()
+
+class Momentum(Strategy):
+    """
+    Classe qui implémente une stratégie Momentum basée sur les rendements logarithmiques : 
+        - on achète les titres qui montent
+        - on vend ceux qui baissent.
+    
+    Attributs : 
+    ---
+        calculation_window : fenêtre de l'historique à considérer pour les calculs
+        nbPositionInPortfolio : nombre d'actifs dans le portefeuille.
+        shortSell : booléen indiquant si la vente à découvert est autorisée.
+        isEquiponderated : booléen indiquant si les parts sont calculées de manière équipondérée ou non. 
+    ---  
+    """
+
+    def __init__(self, calculation_window : int, nbPositionInPortfolio: int,
+                  shortSell : bool, isEquiponderated : bool):
+        self.calculation_window = calculation_window
+        self.shortSell = shortSell
+        self.nbPositionInPortfolio = nbPositionInPortfolio
+        self.isEquiponderated = isEquiponderated
+
+    def get_position(self, historical_data):
+        # Calcul des rendements logarithmiques sur toute la période
+        returns_log = pd.Series(
+            np.log(historical_data.iloc[-1] / historical_data.iloc[0]),
+            index=historical_data.columns
+        )
+
+        # Initialisation de la série position
+        position = pd.Series(dtype='float64') 
+        position = pd.Series(0.0, index=returns_log.index)
+
+        # Triage des rendements dans l'ordre décroissant
+        sorted_titles = returns_log.sort_values(ascending=False)
+
+        # Sélection des meilleurs et pires titres
+        top_titles = sorted_titles[:math.ceil(self.nbPositionInPortfolio / 2)]
+        bottom_titles = sorted_titles[-math.floor(self.nbPositionInPortfolio / 2):]
+
+        # Si la stratégie n'est pas équipondérée
+        if not self.isEquiponderated: 
+
+            # Ajuster les rendements pour les top titres
+            adjustment_factor_top = abs(top_titles.min())
+            adjusted_top_scores = top_titles + adjustment_factor_top
+            total_top_score = adjusted_top_scores.sum()
+
+            # Ajuster les rendements pour les bottom titres
+            adjustment_factor_bottom = abs(bottom_titles.max())            
+            adjusted_bottom_scores = bottom_titles - adjustment_factor_bottom
+            total_bottom_score = abs(adjusted_bottom_scores.sum())
+
+            # Attribution des poids
+            if self.shortSell and total_top_score != 0 and total_bottom_score != 0:  # Éviter les divisions par zéro
+                position[top_titles.index] = (adjusted_top_scores / total_top_score) * 2
+                position[bottom_titles.index] = (adjusted_bottom_scores / total_bottom_score) * 1
+            elif total_top_score != 0 and total_bottom_score != 0 :
+                position[top_titles.index] = (adjusted_top_scores / total_top_score) 
+
+        # Si la stratégie est équipondérée
+        else:  
+            # Attribution des poids
+            if self.shortSell:
+                # Poids positifs pour les top titres
+                positive_weight = 2 / top_titles.size
+                position[top_titles.index] = positive_weight
+
+                # Poids positifs pour les bottom titres
+                negative_weight = -1 / bottom_titles.size
+                position[bottom_titles.index] = negative_weight
+            
+            else : 
+                # Poids positifs pour les top titres
+                positive_weight = 1 / top_titles.size
+                position[top_titles.index] = positive_weight
+                
+        return position
+    
+class TrendFollowing(Strategy):
+    """
+    Classe qui implémente une stratégie Trend Following basée sur une combinaison pondérée des rendements. A l'aide de signaux 
+    à court, moyen et long terme, on détermine l'achat ou la vente des titres. Une moyenne pondérée des rendements est effectuée
+    à l'aide des rendements pour ces trois horizons et des coefficients associés à ces horizons. Si la moyenne pondérée des
+    rendements est positive, les titres sont achetés...
+    
+    Attributs : 
+    ---
+        calculation_window : fenêtre de l'historique à considérer pour les calculs.
+        STCoef, MTCoeff, LTCoeff : coefficient des signaux à court, moyen et long terme.
+    ---  
+    """
+    
+    def __init__(self, calculation_window : int, STCoeff: float, MTCoeff: float, LTCoeff: float):
+        self.calculation_window = calculation_window
+        self.STCoeff = STCoeff
+        self.MTCoeff = MTCoeff
+        self.LTCoeff = LTCoeff
+
+    def get_position(self, historical_data: pd.DataFrame) -> pd.Series:
+
+        # Calcul des rendements logarithmiques 
+        returns_log = np.log(historical_data / historical_data.shift(1))
+
+        # Définition des lags spécifiés
+        lags = [
+            (self.calculation_window-2) // 3,
+            (2 * self.calculation_window - 2) // 3,
+            (self.calculation_window -2)
+        ]
+        weights = [self.STCoeff, self.MTCoeff, self.LTCoeff]
+
+        # Calcul des moyennes pondérées de rendements sur les périodes données
+        sign = pd.Series(0.0, index=returns_log.columns)
+        for lag, weight in zip(lags, weights):
+            if lag > 0:  
+                avg_returns = returns_log.iloc[-lag:].mean()
+                sign += weight * avg_returns
+
+        # Initialisation des positions
+        position = pd.Series(0.0, index=returns_log.columns)
+
+        # Dissociation entre signes positifs et négatifs
+        positive_signals = sign[sign > 0]
+        negative_signals = sign[sign < 0]
+
+        # Calcul des poids égaux pour les signaux positifs
+        if len(positive_signals) > 0:
+            positive_weight = 2 / len(positive_signals)
+            position[positive_signals.index] = positive_weight
+
+        # Calcul des poids égaux pour les signaux négatifs
+        if len(negative_signals) > 0:
+            negative_weight = -1 / len(negative_signals)
+            position[negative_signals.index] = negative_weight
+
+        return position
