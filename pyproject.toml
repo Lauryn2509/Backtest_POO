@@ -1,0 +1,18 @@
+[build-system]  
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "backtest"                     
+version = "0.1.0"
+description = "Backtesting Tool"
+authors = ["Antonin Devalland, Fanny Gauducheau, Lauryn Letaconnoux, Giovanni Manche"]
+readme = "README.md"
+packages = [{include = "backtest"}]   
+
+[tool.poetry.dependencies]
+python = "^3.9"                       
+numpy = "^1.21"                      
+
+[tool.poetry.dev-dependencies]
+pytest = "^6.2.5"                     
