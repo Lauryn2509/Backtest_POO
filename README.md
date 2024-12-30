@@ -93,8 +93,8 @@ Result(backtest: Backtest, risk_free_rate: float, mar: float)
 
 #### Visualisations
 
-- `**plot_results(backend="matplotlib")**` : Affiche la valeur du portefeuille au cours du temps. Options pour `matplotlib.pyplot`, `seaborn` et `plotly`.
-- `**plot_risk_return(backend="seaborn")**` : Génère un graphique rendement/risque pour chaque actif. Options pour `matplotlib.pyplot`, `seaborn`, et `plotly`.
+- **`plot_results(backend="matplotlib")`** : Affiche la valeur du portefeuille au cours du temps. Options pour `matplotlib.pyplot`, `seaborn` et `plotly`.
+- **`plot_risk_return(backend="seaborn")`** : Génère un graphique rendement/risque pour chaque actif. Options pour `matplotlib.pyplot`, `seaborn`, et `plotly`.
 - **`compare_results(*results, strategy_names : List[str]=None, backend : str ="matplotlib")`**` : Génère un ensemble de graphiques et de résultats pour comparer diverses stratégies entre elles. 
 
 #### Statistiques
