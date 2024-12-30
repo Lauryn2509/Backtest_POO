@@ -179,6 +179,11 @@ result.plot_risk_return(backend="seaborn")
 - `strategy_examples.py` : Contient diverses implémentations de `Strategy`
 - `backtest_usage_example.ipynb` : Fournit des exemples d'utilisation du backtest et d'analyse des résultats
 
+## Dossier test
+- `strategy_to_be_tested.py` : Fichier contenant la ou les stratégies que l'on souhaite vérifier.
+- `test_backtest.py` : Tests sur la classe `Backtest` 
+- `test_CreationStrategy.py` : Tests sur la création des stratégies
+- - `test_result` : Tests sur la classe `Result` 
 
 Shield: [![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa]
 
